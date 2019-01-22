@@ -14,10 +14,10 @@ def jieba_tokenizer(text):
 train = pd.read_csv('/home/au/文件/Data/NLP Data/train.csv', index_col=0, encoding = 'utf-8')
 train = train.astype(str)
 cols = ['title1_zh', 'title2_zh', 'label']
-train = train.loc[0:100, cols]
+train = train.loc[0:10000, cols]
 
-train['title1_tokenized'] =train.loc[0:100, 'title1_zh'].apply(jieba_tokenizer)
-train['title2_tokenized'] =train.loc[0:100, 'title2_zh'].apply(jieba_tokenizer)
+train['title1_tokenized'] =train.loc[0:, 'title1_zh'].apply(jieba_tokenizer)
+train['title2_tokenized'] =train.loc[0:, 'title2_zh'].apply(jieba_tokenizer)
 
 # print("======================================")
 # print(train.iloc[0:, [0, 3]].head())
@@ -92,7 +92,7 @@ print(y_train[:5])
 print("-" * 100)
 
 VALIDATION_RATIO = 0.1
-RANDOM_STATE = 60
+RANDOM_STATE = 9527
 
 x1_train, x1_val, x2_train, x2_val, y_train, y_val =train_test_split(
    x1_train, x2_train, y_train, 
@@ -153,23 +153,16 @@ from keras.models import Model
 
 # 分別定義 2 個新聞標題 A & B 為模型輸入
 # 兩個標題都是一個長度為 20 的數字序列
-top_input = Input(
-    shape=(MAX_SEQUENCE_LENGTH, ), 
-    dtype='int32')
-bm_input = Input(
-    shape=(MAX_SEQUENCE_LENGTH, ), 
-    dtype='int32')
+top_input = Input(shape=(MAX_SEQUENCE_LENGTH, ), dtype='int32')
+bm_input = Input(shape=(MAX_SEQUENCE_LENGTH, ), dtype='int32')
 
 # 詞嵌入層
 # 經過詞嵌入層的轉換，兩個新聞標題都變成
 # 一個詞向量的序列，而每個詞向量的維度
 # 為 256
-embedding_layer = Embedding(
-    MAX_NUM_WORDS, NUM_EMBEDDING_DIM)
-top_embedded = embedding_layer(
-    top_input)
-bm_embedded = embedding_layer(
-    bm_input)
+embedding_layer = Embedding(MAX_NUM_WORDS, NUM_EMBEDDING_DIM)
+top_embedded = embedding_layer(top_input)
+bm_embedded = embedding_layer(bm_input)
 
 # LSTM 層
 # 兩個新聞標題經過此層後
@@ -180,23 +173,19 @@ bm_output = shared_lstm(bm_embedded)
 
 # 串接層將兩個新聞標題的結果串接單一向量
 # 方便跟全連結層相連
-merged = concatenate(
-    [top_output, bm_output], 
-    axis=-1)
+merged = concatenate([top_output, bm_output], axis=-1)
+print(merged)
+print("-" * 100)
 
 # 全連接層搭配 Softmax Activation
 # 可以回傳 3 個成對標題
 # 屬於各類別的可能機率
-dense =  Dense(
-    units=NUM_CLASSES, 
-    activation='softmax')
+dense =  Dense(units=NUM_CLASSES, activation='softmax')
 predictions = dense(merged)
 
 # 我們的模型就是將數字序列的輸入，轉換
 # 成 3 個分類的機率的所有步驟 / 層的總和
-model = Model(
-    inputs=[top_input, bm_input], 
-    outputs=predictions)
+model = Model(inputs=[top_input, bm_input], outputs=predictions)
 
 from keras.utils import plot_model
 plot_model(
@@ -205,3 +194,87 @@ plot_model(
     show_shapes=True, 
     show_layer_names=False, 
     rankdir='LR')
+
+print(model.summary())
+print("-" * 100)
+print(x1_train[:9527].shape)
+print("-" * 100)
+
+model.compile(
+    optimizer='rmsprop',
+    loss='categorical_crossentropy',
+    metrics=['accuracy'])
+
+# 決定一次要放多少成對標題給模型訓練
+BATCH_SIZE = 512
+
+# 決定模型要看整個訓練資料集幾遍
+NUM_EPOCHS = 10
+
+# 實際訓練模型
+history = model.fit(
+    # 輸入是兩個長度為 20 的數字序列
+    x=[x1_train, x2_train], 
+    y=y_train,
+    batch_size=BATCH_SIZE,
+    epochs=NUM_EPOCHS,
+    # 每個 epoch 完後計算驗證資料集
+    # 上的 Loss 以及準確度
+    validation_data=(
+        [x1_val, x2_val], 
+        y_val
+    ),
+    # 每個 epoch 隨機調整訓練資料集
+    # 裡頭的數據以讓訓練過程更穩定
+    shuffle=True
+)
+
+test = pd.read_csv('/home/au/文件/Data/NLP Data/train.csv', index_col=0, encoding = 'utf-8')
+test = test.astype(str)
+# 以下步驟分別對新聞標題 A、B　進行
+# 文本斷詞 / Word Segmentation
+test['title1_tokenized'] = \
+    test.loc[:, 'title1_zh'] \
+        .apply(jieba_tokenizer)
+test['title2_tokenized'] = \
+    test.loc[:, 'title2_zh'] \
+        .apply(jieba_tokenizer)
+
+# 將詞彙序列轉為索引數字的序列
+x1_test = tokenizer \
+    .texts_to_sequences(
+        test.title1_tokenized)
+x2_test = tokenizer \
+    .texts_to_sequences(
+        test.title2_tokenized)
+
+# 為數字序列加入 zero padding
+x1_test = keras \
+    .preprocessing \
+    .sequence \
+    .pad_sequences(
+        x1_test, 
+        maxlen=MAX_SEQUENCE_LENGTH)
+x2_test = keras \
+    .preprocessing \
+    .sequence \
+    .pad_sequences(
+        x2_test, 
+        maxlen=MAX_SEQUENCE_LENGTH)    
+
+# 利用已訓練的模型做預測
+predictions = model.predict(
+    [x1_test, x2_test])
+
+print(predictions[:5])
+
+index_to_label = {v: k for k, v in label_to_index.items()}
+
+test['Category'] = [index_to_label[idx] for idx in np.argmax(predictions, axis=1)]
+
+submission = test \
+    .loc[:, ['Category']] \
+    .reset_index()
+
+submission.columns = ['Id', 'Category']
+print(submission.head())
